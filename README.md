@@ -244,10 +244,10 @@ UI details:
 
 ## Ask About Repository (`--ask`)
 
-Provides a repository-wide context (directory tree + selected file contents) and sends your question to `models/gemini-2.5-pro`. The tool uses your `.gitignore`, built-in exclusions, and `--only`/`--exclude` filters. On very large repos, the context may be truncated to fit model limits. Answers stream live in a boxed view; usage stats are printed (files included, context bytes, prompt tokens, prep time).
+Provides a repository-wide context (directory tree + selected file contents) and sends your question to `models/gemini-3-pro-preview`. The tool uses your `.gitignore`, built-in exclusions, and `--only`/`--exclude` filters. On very large repos, the context may be truncated to fit model limits. Answers stream live in a boxed view; usage stats are printed (files included, context bytes, prompt tokens, prep time). After each answer you can type a follow-up; the repository dump is reused and the conversation history is sent, so context carries across turns. Press Enter or `q`/`:q` to exit.
 
 Limits:
-- For safety, the combined question + context is capped at ~1,000,000 tokens. If the limit is exceeded, the request is not sent. Narrow scope with `--only`/`--exclude`.
+- For safety, the conversation (repo context + history) is capped at ~1,000,000 tokens. If the limit is exceeded, the request is not sent. Narrow scope with `--only`/`--exclude`.
 
 Example:
 

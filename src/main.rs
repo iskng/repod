@@ -1652,21 +1652,23 @@ fn fallback_commit_message_multiline(name_status: &str, shortstat: &str) -> Stri
 
 #[derive(Serialize)]
 struct GeminiRequest<'a> {
-    contents: Vec<GeminiContent<'a>>,
+    contents: Vec<GeminiContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<GeminiTool<'a>>>,
     #[serde(rename = "toolConfig", skip_serializing_if = "Option::is_none")]
     tool_config: Option<GeminiToolConfig<'a>>,
 }
 
-#[derive(Serialize)]
-struct GeminiContent<'a> {
-    parts: Vec<GeminiPart<'a>>,
+#[derive(Serialize, Clone)]
+struct GeminiContent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<String>,
+    parts: Vec<GeminiPart>,
 }
 
-#[derive(Serialize)]
-struct GeminiPart<'a> {
-    text: &'a str,
+#[derive(Serialize, Clone)]
+struct GeminiPart {
+    text: String,
 }
 
 #[derive(Deserialize)]
@@ -1738,7 +1740,10 @@ fn generate_commit_message_via_gemini(prompt: &str) -> Result<String> {
 
     let req = GeminiRequest {
         contents: vec![GeminiContent {
-            parts: vec![GeminiPart { text: prompt }],
+            role: Some("user".to_string()),
+            parts: vec![GeminiPart {
+                text: prompt.to_string(),
+            }],
         }],
         tools: None,
         tool_config: None,
@@ -1903,7 +1908,10 @@ fn generate_commit_plan_via_gemini(prompt: &str) -> Result<CommitPlanResponse> {
 
     let req = GeminiRequest {
         contents: vec![GeminiContent {
-            parts: vec![GeminiPart { text: prompt }],
+            role: Some("user".to_string()),
+            parts: vec![GeminiPart {
+                text: prompt.to_string(),
+            }],
         }],
         tools: Some(vec![GeminiTool {
             function_declarations: vec![GeminiFunctionDeclaration {
@@ -2102,60 +2110,112 @@ fn ask_about_repository(
         return Ok(());
     }
 
-    // Do not copy repo dump by default; we'll copy the final answer if --copy is set
-
-    // Build full prompt for token count
-    let prompt_preview = format!(
-        "You are assisting with repository analysis.\n\
-        Answer the user's question based on the repository content.\n\
-        Be concise and specific; include filenames when relevant.\n\
-        Question:\n{}\n\
-        Repository:\n{}",
-        question.trim(),
-        dump
-    );
+    // Build initial conversation with repo context attached to the first user turn
     let tokenizer = o200k_base().unwrap();
-    let token_count = tokenizer.encode_with_special_tokens(&prompt_preview).len();
-    if token_count > 1_000_000 {
+    let instructions = "You are assisting with repository analysis.\nAnswer the user's question based on the repository content.\nBe concise and specific; include filenames when relevant.\nIf unsure, say so briefly.";
+    let mut history: Vec<GeminiContent> = Vec::new();
+    history.push(GeminiContent {
+        role: Some("user".to_string()),
+        parts: vec![GeminiPart {
+            text: format!(
+                "{}\nQuestion:\n{}\nRepository:\n{}",
+                instructions,
+                question.trim(),
+                dump
+            ),
+        }],
+    });
+
+    let initial_tokens = count_tokens_for_gemini(&history, &tokenizer);
+    if initial_tokens > 1_000_000 {
         print_warn(&format!(
             "Context too large ({} tokens > 1,000,000). Aborting request.\nHint: Narrow with --only/--exclude or reduce repository size.",
-            token_count
+            initial_tokens
         ));
         return Ok(());
     }
     print_info(&format!(
         "Prompt tokens: {} | Prep time: {:.2}s",
-        token_count,
+        initial_tokens,
         t0.elapsed().as_secs_f64()
     ));
 
-    print_title("Answer (streaming)");
-    let stream_res = generate_repo_answer_stream_via_gemini(question, &dump);
-    match stream_res {
-        Ok(answer_text) => {
-            if args.copy {
-                if let Ok(mut ctx) = ClipboardContext::new() {
-                    let _ = ctx.set_contents(answer_text);
-                }
-                print_success("Answer copied to clipboard.");
-            }
+    let mut turn = 1usize;
+    loop {
+        let token_count = count_tokens_for_gemini(&history, &tokenizer);
+        if token_count > 1_000_000 {
+            print_warn("Conversation too large for the model. Restart --ask with narrower filters or shorter history.");
+            break;
         }
-        Err(e) => {
-            print_warn(&format!(
-                "Streaming failed ({}). Falling back to non-streaming.",
-                e
-            ));
-            let answer = generate_repo_answer_via_gemini(question, &dump)?;
-            print_boxed("Answer", &answer);
-            if args.copy {
-                if let Ok(mut ctx) = ClipboardContext::new() {
-                    let _ = ctx.set_contents(answer);
-                }
-                print_success("Answer copied to clipboard.");
+
+        print_title(&format!("Answer {} (streaming)", turn));
+        let mut streamed = true;
+        let answer_text = match generate_repo_answer_stream_via_gemini(&history) {
+            Ok(answer_text) => answer_text,
+            Err(e) => {
+                streamed = false;
+                print_warn(&format!(
+                    "Streaming failed ({}). Falling back to non-streaming.",
+                    e
+                ));
+                generate_repo_answer_via_gemini(&history)?
             }
+        };
+        if !streamed {
+            print_boxed("Answer", &answer_text);
         }
+
+        history.push(GeminiContent {
+            role: Some("model".to_string()),
+            parts: vec![GeminiPart {
+                text: answer_text.clone(),
+            }],
+        });
+
+        if args.copy {
+            if let Ok(mut ctx) = ClipboardContext::new() {
+                let _ = ctx.set_contents(answer_text.clone());
+            }
+            print_success("Answer copied to clipboard.");
+        }
+
+        let follow_up = match read_line_prompt("› Ask follow-up (Enter to finish, q to quit): ") {
+            Ok(s) => s,
+            Err(_) => break,
+        };
+        let follow_up = follow_up.trim();
+        if follow_up.is_empty() || follow_up == "q" || follow_up == ":q" {
+            break;
+        }
+
+        history.push(GeminiContent {
+            role: Some("user".to_string()),
+            parts: vec![GeminiPart {
+                text: format!(
+                    "Follow-up question (repository context is unchanged):\n{}",
+                    follow_up
+                ),
+            }],
+        });
+
+        turn += 1;
     }
     Ok(())
+}
+
+fn count_tokens_for_gemini(contents: &[GeminiContent], tokenizer: &tiktoken_rs::CoreBPE) -> usize {
+    let mut combined = String::new();
+    for content in contents {
+        if let Some(role) = &content.role {
+            combined.push_str(role);
+            combined.push_str(": ");
+        }
+        for part in &content.parts {
+            combined.push_str(&part.text);
+            combined.push('\n');
+        }
+    }
+    tokenizer.encode_with_special_tokens(&combined).len()
 }
 
 struct AskStats {
@@ -2296,29 +2356,17 @@ fn build_repo_dump(repo_dir: &Path, args: &Args) -> Result<(String, AskStats)> {
     ))
 }
 
-fn generate_repo_answer_via_gemini(question: &str, repo_dump: &str) -> Result<String> {
+fn generate_repo_answer_via_gemini(contents: &[GeminiContent]) -> Result<String> {
     let api_key =
         std::env::var("GEMINI_API_KEY").map_err(|_| anyhow::anyhow!("GEMINI_API_KEY not set"))?;
-    let model = "gemini-2.5-pro";
+    let model = "gemini-3-pro-preview";
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
         model, api_key
     );
 
-    let prompt = format!(
-        "You are assisting with repository analysis.\n\
-        Answer the user's question based on the repository content.\n\
-        Be concise and specific; include filenames when relevant.\n\
-        Question:\n{}\n\
-        Repository:\n{}",
-        question.trim(),
-        repo_dump
-    );
-
     let req = GeminiRequest {
-        contents: vec![GeminiContent {
-            parts: vec![GeminiPart { text: &prompt }],
-        }],
+        contents: contents.to_vec(),
         tools: None,
         tool_config: None,
     };
@@ -2346,30 +2394,18 @@ fn generate_repo_answer_via_gemini(question: &str, repo_dump: &str) -> Result<St
     }
 }
 
-fn generate_repo_answer_stream_via_gemini(question: &str, repo_dump: &str) -> Result<String> {
+fn generate_repo_answer_stream_via_gemini(contents: &[GeminiContent]) -> Result<String> {
     use std::io::{BufRead, BufReader};
     let api_key =
         std::env::var("GEMINI_API_KEY").map_err(|_| anyhow::anyhow!("GEMINI_API_KEY not set"))?;
-    let model = "gemini-2.5-pro";
+    let model = "gemini-3-pro-preview";
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?key={}&alt=sse",
         model, api_key
     );
 
-    let prompt = format!(
-        "You are assisting with repository analysis.\n\
-        Answer the user's question based on the repository content.\n\
-        Be concise and specific; include filenames when relevant.\n\
-        Question:\n{}\n\
-        Repository:\n{}",
-        question.trim(),
-        repo_dump
-    );
-
     let req = GeminiRequest {
-        contents: vec![GeminiContent {
-            parts: vec![GeminiPart { text: &prompt }],
-        }],
+        contents: contents.to_vec(),
         tools: None,
         tool_config: None,
     };
