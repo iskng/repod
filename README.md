@@ -227,7 +227,7 @@ Notes:
 
 ## AI Commit Messages
 
-When `--commit` is provided, the tool proposes a Conventional Commit message with a subject and a short body based on your current diff (against `HEAD`). It uses Google’s Gemini model `models/gemini-2.5-flash` via the Generative Language API. You’ll be shown the message in a clean, boxed view and asked to confirm with a single keypress (press `y` to commit, `n`/Esc to cancel — no Enter needed).
+When `--commit` is provided, the tool proposes a Conventional Commit message with a subject and a short body based on your current diff (against `HEAD`). It uses Google's Gemini model `models/gemini-3-flash-preview` via the Generative Language API. You’ll be shown the message in a clean, boxed view and asked to confirm with a single keypress (press `y` to commit, `n`/Esc to cancel — no Enter needed).
 
 First run: If `GEMINI_API_KEY` is not set, repod prompts you to paste it (input is hidden). If provided, it saves the key to your shell config (`~/.zshrc` for zsh or `~/.bashrc` for bash) and uses it immediately for the current session. If you skip providing a key, the command exits — there is no local fallback when the API key is missing.
 

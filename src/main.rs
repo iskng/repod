@@ -228,12 +228,12 @@ struct Args {
     only_dirs: Vec<String>,
 
     /// Stage and commit changes with an AI-generated message (single commit)
-    /// Uses Gemini (models/gemini-2.5-flash) via GEMINI_API_KEY
+    /// Uses Gemini (models/gemini-3-flash-preview) via GEMINI_API_KEY
     #[arg(long)]
     commit: bool,
 
     /// Analyze changes and propose multiple commits (per-commit confirmations)
-    /// Uses Gemini (models/gemini-2.5-flash) via GEMINI_API_KEY
+    /// Uses Gemini (models/gemini-3-flash-preview) via GEMINI_API_KEY
     #[arg(long = "multi-commit")]
     multi_commit: bool,
 
@@ -1732,7 +1732,7 @@ struct GeminiFunctionCallingConfig<'a> {
 fn generate_commit_message_via_gemini(prompt: &str) -> Result<String> {
     let api_key =
         std::env::var("GEMINI_API_KEY").map_err(|_| anyhow::anyhow!("GEMINI_API_KEY not set"))?;
-    let model = "gemini-2.5-flash"; // updated model
+    let model = "gemini-3-flash-preview";
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
         model, api_key
@@ -1880,7 +1880,7 @@ fn build_multi_commit_prompt(
 fn generate_commit_plan_via_gemini(prompt: &str) -> Result<CommitPlanResponse> {
     let api_key =
         std::env::var("GEMINI_API_KEY").map_err(|_| anyhow::anyhow!("GEMINI_API_KEY not set"))?;
-    let model = "gemini-2.5-flash";
+    let model = "gemini-3-flash-preview";
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
         model, api_key
