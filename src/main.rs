@@ -248,6 +248,10 @@ struct Args {
     /// Ask a question about the current repository (--ask "question about repo")
     #[arg(long)]
     ask: Option<String>,
+
+    /// Model to use for --ask: "pro" (gemini-3-pro-preview) or "flash" (gemini-3-flash-preview)
+    #[arg(long, default_value = "pro")]
+    model: String,
 }
 
 #[derive(Debug, Clone)]
@@ -2140,6 +2144,12 @@ fn ask_about_repository(
         t0.elapsed().as_secs_f64()
     ));
 
+    // Resolve model name from --model flag
+    let model_name = match args.model.to_lowercase().as_str() {
+        "flash" => "gemini-3-flash-preview",
+        "pro" | _ => "gemini-3-pro-preview",
+    };
+
     let mut turn = 1usize;
     loop {
         let token_count = count_tokens_for_gemini(&history, &tokenizer);
@@ -2150,7 +2160,7 @@ fn ask_about_repository(
 
         print_title(&format!("Answer {} (streaming)", turn));
         let mut streamed = true;
-        let answer_text = match generate_repo_answer_stream_via_gemini(&history) {
+        let answer_text = match generate_repo_answer_stream_via_gemini(&history, model_name) {
             Ok(answer_text) => answer_text,
             Err(e) => {
                 streamed = false;
@@ -2158,7 +2168,7 @@ fn ask_about_repository(
                     "Streaming failed ({}). Falling back to non-streaming.",
                     e
                 ));
-                generate_repo_answer_via_gemini(&history)?
+                generate_repo_answer_via_gemini(&history, model_name)?
             }
         };
         if !streamed {
@@ -2356,10 +2366,9 @@ fn build_repo_dump(repo_dir: &Path, args: &Args) -> Result<(String, AskStats)> {
     ))
 }
 
-fn generate_repo_answer_via_gemini(contents: &[GeminiContent]) -> Result<String> {
+fn generate_repo_answer_via_gemini(contents: &[GeminiContent], model: &str) -> Result<String> {
     let api_key =
         std::env::var("GEMINI_API_KEY").map_err(|_| anyhow::anyhow!("GEMINI_API_KEY not set"))?;
-    let model = "gemini-3-pro-preview";
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
         model, api_key
@@ -2394,11 +2403,10 @@ fn generate_repo_answer_via_gemini(contents: &[GeminiContent]) -> Result<String>
     }
 }
 
-fn generate_repo_answer_stream_via_gemini(contents: &[GeminiContent]) -> Result<String> {
+fn generate_repo_answer_stream_via_gemini(contents: &[GeminiContent], model: &str) -> Result<String> {
     use std::io::{BufRead, BufReader};
     let api_key =
         std::env::var("GEMINI_API_KEY").map_err(|_| anyhow::anyhow!("GEMINI_API_KEY not set"))?;
-    let model = "gemini-3-pro-preview";
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:streamGenerateContent?key={}&alt=sse",
         model, api_key
